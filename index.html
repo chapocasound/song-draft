@@ -1,0 +1,772 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="description" content="Draft songs, artists or albums with friends and score by Spotify streams.">
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<title>Song Draft</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Figtree:wght@400;500;600&family=IBM+Plex+Mono:wght@500;600&display=swap">
+<style>
+body{margin:0}
+/* Layout: single centered column; a sticky room bar on top, the current phase as the main panel, standings below. */
+:root{
+  --bg:#EEF0F5; --surface:#FFFFFF; --sunk:#E3E6EE; --ink:#161A2B; --muted:#5B6178; --line:#D3D8E4;
+  --accent:#2F4BFF; --accent-ink:#FFFFFF; --flag:#C92A62; --flag-soft:#F8DDE7; --good:#167A4C; --good-soft:#D9F0E4;
+  --f-display:"Bricolage Grotesque", "Figtree", system-ui, sans-serif;
+  --f-body:"Figtree", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-num:"IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --r:10px;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0F1220; --surface:#181C2E; --sunk:#12162A; --ink:#E9ECF6; --muted:#9AA1BC; --line:#2A3049;
+  --accent:#8291FF; --accent-ink:#0F1220; --flag:#FF7BA6; --flag-soft:#3A1C2A; --good:#5AD596; --good-soft:#173527; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0F1220; --surface:#181C2E; --sunk:#12162A; --ink:#E9ECF6; --muted:#9AA1BC; --line:#2A3049;
+  --accent:#8291FF; --accent-ink:#0F1220; --flag:#FF7BA6; --flag-soft:#3A1C2A; --good:#5AD596; --good-soft:#173527; color-scheme:dark}
+
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:15px;line-height:1.5}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:10;background:var(--surface)}
+.wrap{max-width:760px;margin:0 auto;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:20px 48px;display:grid;gap:18px}
+.bar{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--surface);border-bottom:1px solid var(--line)}
+.bar-in{max-width:760px;margin:0 auto;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:10px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.brand{font-family:var(--f-display);font-weight:800;font-size:20px;letter-spacing:-.01em;margin-right:auto}
+.brand span{color:var(--accent)}
+.code{font-family:var(--f-num);font-weight:600;letter-spacing:.18em;background:var(--sunk);padding:3px 10px;border-radius:6px}
+h1,h2,h3{font-family:var(--f-display);margin:0;text-wrap:balance;line-height:1.15}
+h1{font-size:30px;font-weight:800;letter-spacing:-.02em}
+h2{font-size:22px;font-weight:700}
+h3{font-size:16px;font-weight:700}
+p{margin:0}
+.muted{color:var(--muted)}
+.eyebrow{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:18px;display:grid;gap:14px;min-width:0}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.stack{display:grid;gap:10px}
+label{font-size:13px;font-weight:600;display:grid;gap:5px}
+input,select{font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:9px 11px;width:100%;min-width:0}
+input:focus-visible,select:focus-visible,button:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+@media (max-width:520px){.grid2{grid-template-columns:1fr}}
+button,.btn{font:inherit;font-weight:600;border-radius:8px;padding:9px 14px;border:1px solid var(--line);background:var(--surface);color:var(--ink);cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+button.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+button:disabled{opacity:.5;cursor:not-allowed}
+button.flag{border-color:var(--line);color:var(--muted);padding:5px 10px;font-size:13px}
+button.flag.on{background:var(--flag-soft);border-color:var(--flag);color:var(--flag)}
+.small{font-size:13px}
+.err{color:var(--flag);font-size:13px;font-weight:600}
+.banner{background:var(--sunk);border-radius:var(--r);padding:14px 16px;display:grid;gap:4px}
+.banner .cat{font-family:var(--f-display);font-weight:800;font-size:24px;letter-spacing:-.01em;text-wrap:balance}
+.pill{display:inline-block;font-size:12px;font-weight:600;padding:2px 9px;border-radius:999px;background:var(--sunk);color:var(--muted)}
+.pill.turn{background:var(--accent);color:var(--accent-ink)}
+.pill.done{background:var(--good-soft);color:var(--good)}
+.pill.zero{background:var(--flag-soft);color:var(--flag)}
+.players{display:flex;flex-wrap:wrap;gap:8px}
+.chip{padding:5px 11px;border-radius:999px;border:1px solid var(--line);font-weight:600;font-size:14px}
+.chip.me{border-color:var(--accent)}
+.board{display:grid;gap:6px}
+.slot{display:grid;grid-template-columns:62px minmax(0,1fr) auto;gap:10px;align-items:center;padding:8px 10px;border-radius:8px;border:1px solid var(--line)}
+.slot.next{border-color:var(--accent);border-style:dashed}
+.slot .tag{font-family:var(--f-num);font-size:12px;color:var(--muted)}
+.slot .who{font-size:12px;color:var(--muted)}
+.slot .ans{font-weight:600;overflow-wrap:anywhere}
+.num{font-family:var(--f-num);font-variant-numeric:tabular-nums;font-weight:600}
+.hide{letter-spacing:.2em;color:var(--muted)}
+.cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px}
+.col{border:1px solid var(--line);border-radius:var(--r);padding:12px;display:grid;gap:8px;align-content:start;min-width:0}
+.col.win{border-color:var(--good);background:var(--good-soft)}
+.line{display:flex;justify-content:space-between;gap:10px;align-items:baseline}
+.line .a{min-width:0;overflow-wrap:anywhere}
+.struck{text-decoration:line-through;color:var(--muted)}
+.total{border-top:1px solid var(--line);padding-top:8px;font-family:var(--f-num);font-weight:600;font-size:18px}
+table{border-collapse:collapse;width:100%}
+th,td{text-align:left;padding:7px 6px;border-bottom:1px solid var(--line);font-size:14px}
+th{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:600}
+td.r,th.r{text-align:right}
+.note{font-size:13px;color:var(--muted)}
+.opts{display:grid;gap:4px;max-height:320px;overflow-y:auto;border:1px solid var(--line);border-radius:8px;padding:4px}
+.opt{display:grid;gap:1px;justify-items:start;text-align:left;white-space:normal;border:0;border-radius:6px;padding:7px 10px;font-weight:500}
+.opt:hover{background:var(--sunk)}
+.opt.on{background:var(--accent);color:var(--accent-ink)}
+.opt .ot{font-weight:600;overflow-wrap:anywhere}
+.opt .os{font-size:12px;opacity:.75}
+.src{font-size:12px;color:var(--muted)}
+@media (prefers-reduced-motion:no-preference){.reveal .num{animation:pop .5s ease-out both}@keyframes pop{from{opacity:.2;transform:translateY(4px)}to{opacity:1;transform:none}}}
+</style>
+</head>
+<body>
+
+<div class="bar"><div class="bar-in">
+  <div class="brand">Song <span>Draft</span></div>
+  <div id="barRoom"></div>
+</div></div>
+<main class="wrap" id="app">
+  <section class="panel"><h2>Loading the room…</h2><p class="muted">Connecting to the shared game board.</p></section>
+</main>
+
+<script>
+(function(){
+const METRICS = {
+  songs:{label:"Spotify plays", noun:"song"},
+  artists:{label:"Monthly listeners", noun:"artist"},
+  albums:{label:"Album streams", noun:"album"},
+  custom:{label:"Custom number", noun:"answer"}
+};
+const POOL = [
+  ["Songs with a month in the title","songs"],
+  ["Artists with John, Johnny, Johnson or Jonathan in their name","artists"],
+  ["Bands with both male and female lead vocalists","artists"],
+  ["Albums released in the 2000s","albums"],
+  ["Songs with a color in the title","songs"],
+  ["Songs with a day of the week in the title","songs"],
+  ["Songs with a number in the title","songs"],
+  ["Songs with a city in the title","songs"],
+  ["Songs with a question mark in the title","songs"],
+  ["Christmas songs","songs"],
+  ["Songs from movie soundtracks","songs"],
+  ["Duets between two solo artists","songs"],
+  ["Songs released before 1980","songs"],
+  ["Songs with a woman's name in the title","songs"],
+  ["Songs with 'Love' in the title","songs"],
+  ["Rappers with 'Lil' in their name","artists"],
+  ["Artists from Canada","artists"],
+  ["One-word artist names","artists"],
+  ["Bands with a number in their name","artists"],
+  ["Debut albums","albums"],
+  ["Self-titled albums","albums"],
+  ["Albums with a person's name in the title","albums"],
+  ["Live albums","albums"],
+  ["Albums released in the 1990s","albums"]
+];
+
+/* ---------- stream-count dataset (Kworb snapshot, published beside the page) ---------- */
+const DSTOP = new Set(["the","a","an","of","and","feat","ft","with","from","version","remastered","remaster","edit","mix","remix","live","de","la","el","en","y","to","in","on","for","is","my","me","you","i"]);
+const QSTOP = new Set([...DSTOP,"o","os","as","e","do","da","dos","das","um","uma","no","na","los","las","le","les","del","al"]);
+const toks = s => String(s||"").toLowerCase().replace(/([a-z0-9])!(?=[a-z0-9])/g,"$1i").replace(/\$/g,"s").replace(/@/g,"a").normalize("NFKD").replace(/[̀-ͯ]/g,"").replace(/[^\x00-\x7f]/g,"").replace(/[^a-z0-9 ]+/g," ").split(" ").filter(Boolean);
+const DATA = {meta:null, shards:{}, artists:null, ver:"4"};
+async function loadJSON(path){ const r = await fetch(path+"?v="+DATA.ver); if(!r.ok) throw new Error("Couldn't load "+path); return r.json(); }
+async function dataMeta(){ if(!DATA.meta) DATA.meta = await loadJSON("data/meta.json"); return DATA.meta; }
+const baseTitle = t => String(t).replace(/\s+[-–—]\s+.*$/,"").replace(/\s*[(\[].*$/,"").trim() || String(t);
+function shardOf(tok, n){ return (tok.charCodeAt(0)*131 + tok.charCodeAt(1)) % n; }
+// typo-tolerant word match: exact for short words, 1 edit from 4 letters, 2 edits from 8
+function near(a,b){
+  if(a===b) return 0;
+  const m = Math.min(a.length,b.length), max = m>=8?2:(m>=4?1:0);
+  if(!max || Math.abs(a.length-b.length)>1) return 99;
+  let prev = Array.from({length:b.length+1},(_,j)=>j);
+  for(let i=1;i<=a.length;i++){
+    const cur=[i]; let rowMin=i;
+    for(let j=1;j<=b.length;j++){ cur[j]=Math.min(prev[j]+1,cur[j-1]+1,prev[j-1]+(a[i-1]===b[j-1]?0:1)); if(cur[j]<rowMin) rowMin=cur[j]; }
+    if(rowMin>max) return 99; prev=cur;
+  }
+  return prev[b.length]<=max ? prev[b.length] : 99;
+}
+const best = (t, list) => list.reduce((m,w)=>Math.min(m,near(t,w)),99);
+function mkRec(label, sub, value, id){
+  const lt = toks(label), at = toks(String(sub).replace(/^feat\. /,""));
+  const tk = lt.concat(at); if(lt.length>1) tk.push(lt.join("")); if(at.length>1) tk.push(at.join(""));
+  return {label, sub, value, id, tk, bt: sub==="" ? lt : toks(baseTitle(label))};
+}
+// cost of a record for the typed words, or 99 when it doesn't qualify.
+// Every meaningful word of the title (or artist name) has to be typed, in any order, with small typos allowed,
+// and every typed word has to belong to the title or artist. Partial words never browse the list.
+function matchCost(r, q){
+  const qq = q.filter(t=>!QSTOP.has(t)); if(!qq.length) return 99;
+  const core = r.bt.filter(t=>!QSTOP.has(t)), need = core.length ? core : r.bt; if(!need.length) return 99;
+  let cost = 0;
+  const joined = qq.join("")===need.join("") ? 0 : 99;
+  let needCost = 0;
+  for(const t of need){ const c = best(t, q); if(c===99){ needCost=99; break; } needCost+=c; }
+  if(needCost===99 && joined===99) return 99;
+  cost += Math.min(needCost, joined);
+  for(const t of qq){ const c = best(t, r.tk); if(c===99) return 99; cost+=c; }
+  return cost;
+}
+async function searchData(metric, query){
+  const q = toks(query); if(!q.length) return [];
+  const qq = q.filter(t=>!QSTOP.has(t)&&t.length>=2);
+  if(!qq.length) return [];
+  let rows;
+  if(metric==="artists"){
+    if(!DATA.artists) DATA.artists = (await loadJSON("data/artists.json")).map(r=>mkRec(r[0],"",r[1],"ar:"+r[2]));
+    rows = DATA.artists;
+  } else {
+    const meta = await dataMeta(), dir = metric==="albums" ? "l" : "s";
+    const keys = qq.slice().sort((a,b)=>b.length-a.length).slice(0,2);
+    if(qq.length>1) keys.push(qq.join(""));
+    const shs = [...new Set(keys.map(t=>shardOf(t, meta.nshard)))];
+    const seen = new Set(); rows = [];
+    for(const sh of shs){
+      const k = dir+sh;
+      if(!DATA.shards[k]) DATA.shards[k] = (await loadJSON("data/"+dir+"/"+sh+".json")).map(r=>mkRec(r[0],r[1],r[2],(dir==="l"?"al:":"tr:")+r[0]+"|"+r[1]));
+      for(const r of DATA.shards[k]) if(!seen.has(r.id)){ seen.add(r.id); rows.push(r); }
+    }
+  }
+  const hits = [];
+  for(const r of rows){ const c = matchCost(r,q); if(c<99) hits.push([c,r]); }
+  // rank by how closely the words match, never by streams (that would give the answer away)
+  hits.sort((a,b)=>a[0]-b[0] || a[1].label.length-b[1].label.length || a[1].label.localeCompare(b[1].label));
+  return hits.slice(0,12).map(h=>h[1]);
+}
+
+const S = {db:null,user:null,me:null,canWrite:null,code:null,game:null,members:[],picks:[],flags:[],reviews:[],cats:[],unsubs:[],busy:false,msg:"",ready:false};
+const $app = document.getElementById("app");
+const $bar = document.getElementById("barRoom");
+
+const esc = s => String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const norm = s => String(s||"").toLowerCase().normalize("NFKD").replace(/[^a-z0-9]/g,"");
+const fmt = n => (Math.round(n)||0).toLocaleString("en-US");
+function parseNum(raw){
+  const s = String(raw||"").trim().toLowerCase().replace(/[\s,_]/g,"");
+  const m = s.match(/^(\d+(?:\.\d+)?)([kmb])?$/);
+  if(!m) return null;
+  const mult = {k:1e3,m:1e6,b:1e9}[m[2]]||1;
+  return Math.round(parseFloat(m[1])*mult);
+}
+const ls = {get(k){try{return localStorage.getItem(k)}catch(e){return null}},set(k,v){try{localStorage.setItem(k,v)}catch(e){}}};
+const nickOf = uid => (S.members.find(m=>m.uid===uid)||{}).nick || "Player";
+const metricLabel = cat => cat ? (cat.metric==="custom" ? (cat.customLabel||"Custom number") : METRICS[cat.metric].label) : "";
+
+
+/* ---------- peer-to-peer room: the host's browser keeps the game, others connect to it ---------- */
+const PFX = "songdraft-v1-";
+const clone = v => v==null ? v : JSON.parse(JSON.stringify(v));
+const NET = {peer:null, host:false, code:null, conns:new Set(), conn:null, store:{}, subs:new Set(), pending:new Map(), seq:0, status:"", retry:null};
+function netEmit(){ NET.subs.forEach(f=>{ try{ f(); }catch(e){} }); }
+function applyOp(op){
+  if(op.kind==="set") NET.store[op.path]=op.data;
+  else if(op.kind==="update") NET.store[op.path]=Object.assign({},NET.store[op.path]||{},op.data);
+  else if(op.kind==="delete") delete NET.store[op.path];
+}
+function hostBroadcast(){
+  ls.set("sd-store-"+NET.code, JSON.stringify(NET.store));
+  const msg={t:"state",store:NET.store};
+  NET.conns.forEach(c=>{ try{ if(c.open) c.send(msg); }catch(e){} });
+  netEmit();
+}
+function peerOpts(){
+  const h=new URLSearchParams(location.search).get("peerhost");
+  if(!h) return {debug:0};
+  const [host,port]=h.split(":");
+  return {host, port:+port||443, path:"/", secure:!port, debug:0};
+}
+function netReset(){
+  clearTimeout(NET.retry);
+  const old=NET.peer; NET.peer=null;
+  try{ old && old.destroy(); }catch(e){}
+  NET.conn=null; NET.conns=new Set(); NET.host=false; NET.code=null; NET.store={}; NET.status="";
+  NET.pending.forEach(p=>p.reject({message:"Disconnected."})); NET.pending.clear();
+}
+function hostRoom(code){
+  netReset(); NET.code=code; NET.host=true;
+  try{ NET.store = JSON.parse(ls.get("sd-store-"+code)||"{}")||{}; }catch(e){ NET.store={}; }
+  return new Promise((resolve,reject)=>{
+    if(typeof Peer==="undefined") return reject({message:"The connection library didn't load. Check your internet and reload."});
+    const peer = new Peer(PFX+code, peerOpts()); NET.peer=peer; let opened=false;
+    peer.on("open",()=>{ opened=true; NET.status=""; ls.set("sd-host-"+code,"1"); resolve(); netEmit(); });
+    peer.on("connection",c=>{
+      c.on("open",()=>{ NET.conns.add(c); try{ c.send({t:"state",store:NET.store}); }catch(e){} });
+      c.on("data",m=>{ if(m && m.t==="op" && m.op){ applyOp(m.op); hostBroadcast(); try{ c.send({t:"ack",id:m.id}); }catch(e){} } });
+      c.on("close",()=>NET.conns.delete(c));
+      c.on("error",()=>NET.conns.delete(c));
+    });
+    peer.on("disconnected",()=>{ if(NET.peer===peer && !peer.destroyed){ NET.status="Reconnecting to the connection server…"; netEmit(); setTimeout(()=>{ try{ peer.reconnect(); }catch(e){} },2000); } });
+    peer.on("error",e=>{
+      if(!opened){ if(NET.peer===peer) NET.peer=null; try{ peer.destroy(); }catch(x){} reject({message: e.type==="unavailable-id" ? "already-hosted" : "Couldn't reach the connection server ("+e.type+"). Check your internet and try again."}); }
+      else { NET.status="Connection problem ("+e.type+")."; netEmit(); }
+    });
+  });
+}
+function joinNet(code){
+  netReset(); NET.code=code;
+  return new Promise((resolve,reject)=>{
+    if(typeof Peer==="undefined") return reject({message:"The connection library didn't load. Check your internet and reload."});
+    let done=false;
+    const peer = new Peer(peerOpts()); NET.peer=peer;
+    const fail = msg => { if(done) return; done=true; clearTimeout(timer); if(NET.peer===peer){ NET.peer=null; NET.code=null; } try{ peer.destroy(); }catch(e){} reject({message:msg}); };
+    const timer = setTimeout(()=>fail("Couldn't reach room "+code+". Check the code, and make sure the host still has the game open."),20000);
+    const connect = () => {
+      if(NET.peer!==peer || peer.destroyed) return;
+      const c = peer.connect(PFX+code,{reliable:true}); NET.conn=c;
+      c.on("open",()=>{ NET.status=""; netEmit(); });
+      c.on("data",m=>{
+        if(!m) return;
+        if(m.t==="state"){ NET.store=m.store||{}; if(!done){ done=true; clearTimeout(timer); resolve(); } netEmit(); }
+        else if(m.t==="ack"){ const p=NET.pending.get(m.id); if(p){ NET.pending.delete(m.id); p.resolve(); } }
+      });
+      c.on("close",()=>{ if(NET.peer!==peer || peer.destroyed || !done) return; NET.status="Lost the host. Reconnecting…"; netEmit(); clearTimeout(NET.retry); NET.retry=setTimeout(connect,3000); });
+    };
+    peer.on("open",connect);
+    peer.on("disconnected",()=>{ if(NET.peer===peer && !peer.destroyed) setTimeout(()=>{ try{ peer.reconnect(); }catch(e){} },2000); });
+    peer.on("error",e=>{
+      if(e.type==="peer-unavailable"){
+        if(!done) fail("Room "+code+" isn't open. Check the code, and make sure the host still has the game open.");
+        else { NET.status="The host is offline. Reconnecting…"; netEmit(); clearTimeout(NET.retry); NET.retry=setTimeout(connect,4000); }
+      }
+      else if(!done) fail("Couldn't connect ("+e.type+"). Check your internet and try again.");
+      else { NET.status="Connection problem ("+e.type+")."; netEmit(); }
+    });
+  });
+}
+function netWrite(op){
+  if(NET.host){ applyOp(op); hostBroadcast(); return Promise.resolve(); }
+  return new Promise((resolve,reject)=>{
+    const c=NET.conn;
+    if(!c || !c.open) return reject({message:"Not connected to the host right now. Wait a moment and try again."});
+    const id=++NET.seq; NET.pending.set(id,{resolve,reject});
+    try{ c.send({t:"op",id,op}); }catch(e){ NET.pending.delete(id); return reject({message:"Couldn't send that to the host."}); }
+    setTimeout(()=>{ if(NET.pending.has(id)){ NET.pending.delete(id); reject({message:"The host didn't answer. Try again."}); } },8000);
+  });
+}
+const netDb = {
+  doc: path => ({
+    get: async () => { const v=NET.store[path]; return {exists:!!v, data:()=>clone(v)}; },
+    set: d => netWrite({kind:"set",path,data:clone(d)}),
+    update: d => netWrite({kind:"update",path,data:clone(d)}),
+    delete: () => netWrite({kind:"delete",path}),
+    onSnapshot: cb => { const f=()=>{ const v=NET.store[path]; cb({exists:!!v, data:()=>clone(v)}); }; NET.subs.add(f); setTimeout(f,0); return ()=>NET.subs.delete(f); }
+  }),
+  collection: col => ({ where: (k,op,v) => ({ onSnapshot: cb => {
+    const f=()=>cb({docs:Object.keys(NET.store).filter(p=>p.startsWith(col+"/") && NET.store[p] && NET.store[p][k]===v).map(p=>({id:p.slice(col.length+1), data:()=>clone(NET.store[p])}))});
+    NET.subs.add(f); setTimeout(f,0); return ()=>NET.subs.delete(f);
+  } }) })
+};
+let renderQueued=false;
+function scheduleRender(){ if(renderQueued) return; renderQueued=true; setTimeout(()=>{ renderQueued=false; render(); },0); }
+async function resume(code){
+  S.msg="";
+  try{
+    if(ls.get("sd-host-"+code)){
+      // after a reload the connection server can take a few seconds to free the room code
+      for(let i=0;;i++){ try{ await hostRoom(code); break; }catch(e){ if(e.message!=="already-hosted" || i>=6) throw e; S.msg="Reopening room "+code+"…"; render(); await new Promise(r=>setTimeout(r,2500)); } }
+    } else await joinNet(code);
+    enter(code);
+  }catch(e){
+    netReset(); S.code=null; S.msg = e.message==="already-hosted" ? "Room "+code+" is open in another tab or browser." : e.message;
+    history.replaceState(null,"",location.pathname+location.search+"#"+code); render();
+  }
+}
+
+/* ---------- derived game state ---------- */
+function derive(){
+  const g = S.game; if(!g) return {phase:"none"};
+  const order = g.order||[], n = order.length, c = g.cat||0;
+  const inGame = order.includes(S.me);
+  if(g.status==="lobby") return {phase:"lobby",order,n,c,inGame};
+  if(g.status==="ended") return {phase:"ended",order,n,c,inGame};
+  const cat = S.cats.find(x=>x.c===c);
+  const setter = n ? order[c % n] : null;
+  if(!cat) return {phase:"setting",order,n,c,inGame,setter};
+  const picks = S.picks.filter(p=>p.cat===c).sort((a,b)=>a.slot-b.slot);
+  const total = n*cat.rounds, R = cat.rounds, cr = Math.min(g.round||0, R-1);
+  const turnOf = slot => { const r=Math.floor(slot/n), pos=slot%n, idx = r%2 ? n-1-pos : pos; return order[(idx + c) % n]; };
+  const base = {order,n,c,inGame,setter,cat,picks,total,turnOf,R,cr};
+  if(picks.length < (cr+1)*n) return Object.assign(base,{phase:"drafting",slot:picks.length,turn:turnOf(picks.length)});
+  const reviewed = order.filter(u=>S.reviews.some(x=>x.cat===c && (x.round||0)===cr && x.uid===u));
+  const revealed = g.forceReveal===c+":"+cr || reviewed.length===n;
+  const rp = picks.filter(p=>Math.floor(p.slot/n)===cr);
+  return Object.assign(base,{phase:!revealed?"review":(cr===R-1?"reveal":"roundReveal"),reviewed,rp});
+}
+function flagCount(c,slot){ return S.flags.filter(f=>f.cat===c && f.slot===slot).length; }
+function isZeroed(c,slot,n){ return flagCount(c,slot)*2 > (n-1); }
+function scoreCat(c,order,upTo){
+  const n = order.length, sums = {}; order.forEach(u=>sums[u]=0);
+  S.picks.filter(p=>p.cat===c && (upTo==null || Math.floor(p.slot/n)<=upTo)).forEach(p=>{ if(!(p.uid in sums)) sums[p.uid]=0; if(!isZeroed(c,p.slot,n)) sums[p.uid]+= (p.value||0); });
+  const best = Math.max(0,...Object.values(sums));
+  const winners = best>0 ? Object.keys(sums).filter(u=>sums[u]===best) : [];
+  return {sums,winners};
+}
+function standings(d){
+  const g = S.game, order = g.order||[];
+  const done = S.cats.filter(x=>x.c < (g.cat||0) || (d.phase==="reveal" && x.c===g.cat)).sort((a,b)=>a.c-b.c);
+  const rows = {}; order.forEach(u=>rows[u]={uid:u,wins:0,total:0});
+  done.forEach(cat=>{ const s = scoreCat(cat.c,order); Object.keys(s.sums).forEach(u=>{ if(!rows[u]) rows[u]={uid:u,wins:0,total:0}; rows[u].total+=s.sums[u]; }); s.winners.forEach(u=>rows[u].wins++); });
+  return {done, rows:Object.values(rows).sort((a,b)=>b.wins-a.wins || b.total-a.total)};
+}
+
+/* ---------- writes ---------- */
+async function act(fn){
+  if(S.busy) return; S.busy=true; S.msg=""; render();
+  try{ await fn(); }catch(e){ S.msg = (e && e.message) || "Something went wrong. Try again."; }
+  S.busy=false; render();
+}
+const gameRef = () => S.db.doc("games/"+S.code);
+
+function genCode(){ const a="ABCDEFGHJKLMNPQRSTUVWXYZ"; let s=""; for(let i=0;i<4;i++) s+=a[Math.floor(Math.random()*a.length)]; return s; }
+
+async function createRoom(nick){
+  let code, tries=0;
+  for(;;){
+    code = genCode();
+    try{ await hostRoom(code); break; }
+    catch(e){ if(e.message!=="already-hosted" || ++tries>=4) throw e; }
+  }
+  await S.db.doc("games/"+code).set({host:S.me,status:"lobby",order:[],cat:0,round:0,forceReveal:-1,createdAt:Date.now()});
+  await joinRoom(code,nick);
+}
+async function joinRoom(code,nick){
+  code = code.toUpperCase().replace(/[^A-Z]/g,"");
+  if(!(NET.code===code && (NET.host || (NET.conn && NET.conn.open)))){
+    try{ await joinNet(code); }catch(e){ throw e; }
+  }
+  const snap = await S.db.doc("games/"+code).get();
+  if(!snap.exists){ throw {message:"No room with code "+code+". Check the code and try again."}; }
+  ls.set("sd-nick",nick); ls.set("sd-room-"+code,"1");
+  await S.db.doc("members/"+code+"_"+S.me).set({game:code,uid:S.me,nick,joinedAt:Date.now()});
+  enter(code);
+}
+function enter(code){
+  S.unsubs.forEach(u=>u()); S.unsubs=[];
+  S.code=code; S.game=null; S.members=[];S.picks=[];S.flags=[];S.reviews=[];S.cats=[];
+  if(location.hash!=="#"+code) location.hash=code;
+  const err = e => { S.msg = "Lost connection to the room ("+(e&&e.code||"error")+"). Reload the page."; render(); };
+  S.unsubs.push(gameRef().onSnapshot(s=>{ S.game = s.exists ? s.data() : null; S.ready=true; scheduleRender(); }, err));
+  ["members","picks","flags","reviews","cats"].forEach(col=>{
+    S.unsubs.push(S.db.collection(col).where("game","==",code).onSnapshot(q=>{ S[col]=q.docs.map(d=>Object.assign({id:d.id},d.data())); scheduleRender(); }, err));
+  });
+  render();
+}
+function leave(){ S.unsubs.forEach(u=>u()); S.unsubs=[]; if(S.code){ try{ localStorage.removeItem("sd-host-"+S.code); localStorage.removeItem("sd-room-"+S.code); }catch(e){} } netReset(); S.code=null; S.game=null; history.replaceState(null,"",location.pathname+location.search); render(); }
+
+/* ---------- views ---------- */
+function vEntry(){
+  const nick = ls.get("sd-nick")||"";
+  const hashCode = (location.hash||"").slice(1).toUpperCase();
+  return `
+  <section class="panel">
+    <div class="stack">
+      <h1>Draft songs. Bet on the streams.</h1>
+      <p class="muted">Take turns picking answers for a music category. Everyone reviews the picks, the room zeroes answers that don't fit, then the stream counts decide who drafted best.</p>
+    </div>
+    <label for="nick">Your name in the room<input id="nick" maxlength="24" placeholder="e.g. Riley" value="${esc(nick)}"></label>
+    <div class="grid2">
+      <div class="stack">
+        <span class="eyebrow">Start a new room</span>
+        <button class="primary" id="btnCreate" ${S.busy?"disabled":""}>Create room</button>
+      </div>
+      <div class="stack">
+        <span class="eyebrow">Join with a code</span>
+        <div class="row" style="flex-wrap:nowrap"><input id="joinCode" maxlength="4" placeholder="ABCD" value="${esc(hashCode)}" style="text-transform:uppercase;font-family:var(--f-num);letter-spacing:.15em"><button id="btnJoin" ${S.busy?"disabled":""}>Join</button></div>
+      </div>
+    </div>
+    ${S.msg?`<p class="err">${esc(S.msg)}</p>`:""}
+  </section>
+  <section class="panel">
+    <h3>How a category plays</h3>
+    <div class="stack small">
+      <p><b>1. Set.</b> One player writes a category and picks what counts: Spotify plays for songs, monthly listeners for artists, or album streams.</p>
+      <p><b>2. Draft a round.</b> Everyone picks once, in snake order starting with player 1. Type the full title to find your pick; the stream count is filled in for you and stays hidden.</p>
+      <p><b>3. Review.</b> Everyone flags answers that don't fit the category. An answer flagged by a majority of the other players scores zero.</p>
+      <p><b>4. Reveal.</b> The round's numbers are shown and added to each player's total. Repeat for every round; the highest total wins the category.</p>
+    </div>
+    <p class="src">Stream counts: Spotify totals from kworb.net${DATA.meta?", snapshot of "+esc(DATA.meta.date)+" ("+DATA.meta.songs.toLocaleString("en-US")+" songs, "+DATA.meta.albums.toLocaleString("en-US")+" albums, "+DATA.meta.artists.toLocaleString("en-US")+" artists)":""}.</p>
+  </section>`;
+}
+
+function vLobby(d){
+  const g=S.game, isHost=g.host===S.me;
+  const joined = S.members.slice().sort((a,b)=>a.joinedAt-b.joinedAt);
+  return `
+  <section class="panel">
+    <div class="stack">
+      <span class="eyebrow">Lobby</span>
+      <h1>Room <span class="code">${esc(S.code)}</span></h1>
+      <p class="muted">Send your friends this link. They open it, type a name and join.</p>
+      <div class="row" style="flex-wrap:nowrap"><input id="inviteLink" readonly value="${esc(location.origin+location.pathname+"#"+S.code)}"><button id="btnCopy">Copy</button></div>
+      ${isHost?`<p class="note">You're hosting: the game runs in your browser, so keep this tab open until you're done. If it closes, reopen the link and the room comes back.</p>`:""}
+    </div>
+    <div class="players">${joined.map(m=>`<span class="chip ${m.uid===S.me?"me":""}">${esc(m.nick)}${m.uid===g.host?' <span class="muted small">host</span>':""}</span>`).join("")||'<span class="muted">Nobody here yet.</span>'}</div>
+    ${isHost?`<div class="row"><button class="primary" id="btnStart" ${joined.length<2||S.busy?"disabled":""}>Start game with ${joined.length} players</button>${joined.length<2?'<span class="note">Needs at least 2 players.</span>':""}</div>`:`<p class="muted">Waiting for ${esc(nickOf(g.host))} to start the game.</p>`}
+  </section>`;
+}
+
+function vBanner(d){
+  return `<div class="banner"><span class="eyebrow">Category ${d.c+1} · set by ${esc(nickOf(d.setter))}</span><div class="cat">${esc(d.cat.text)}</div><span class="small muted">Scored by <b>${esc(metricLabel(d.cat))}</b> · ${d.cat.rounds} round${d.cat.rounds>1?"s":""}${d.cr!=null?` · round ${d.cr+1} of ${d.R}`:""}</span></div>`;
+}
+
+function vSetting(d){
+  const mine = d.setter===S.me;
+  const waiting = S.members.filter(m=>!d.order.includes(m.uid));
+  const isHost = S.game.host===S.me;
+  if(!mine) return `<section class="panel"><span class="eyebrow">Category ${d.c+1}</span><h2>${esc(nickOf(d.setter))} is choosing the category</h2><p class="muted">The draft starts as soon as it's set.</p>${hostTools(d,isHost,waiting)}</section>`;
+  return `
+  <section class="panel">
+    <div class="stack"><span class="eyebrow">Category ${d.c+1} · your turn to set</span><h2>Write a category</h2></div>
+    <label for="catText">Category<input id="catText" maxlength="120" placeholder="e.g. Songs with a month in the title"></label>
+    <div class="row"><button id="btnRandom" type="button">Pick one from the pool</button></div>
+    <div class="grid2">
+      <label for="catMetric">Scored by<select id="catMetric">
+        <option value="songs">Spotify plays (songs)</option>
+        <option value="artists">Monthly listeners (artists)</option>
+        <option value="albums">Album streams (albums)</option>
+        <option value="custom">Something else</option>
+      </select></label>
+      <label for="catRounds">Picks per player<select id="catRounds">${[1,2,3,4,5].map(r=>`<option value="${r}" ${r===3?"selected":""}>${r}</option>`).join("")}</select></label>
+    </div>
+    <label for="catCustom" id="customWrap" hidden>Name of the number<input id="catCustom" maxlength="40" placeholder="e.g. Album sales"></label>
+    <div class="row"><button class="primary" id="btnSetCat" ${S.busy?"disabled":""}>Start the draft</button></div>
+    ${hostTools(d,isHost,waiting)}
+  </section>`;
+}
+function hostTools(d,isHost,waiting){
+  if(!isHost) return "";
+  return `<div class="row small">${waiting.length?`<button id="btnAddLate" ${S.busy?"disabled":""}>Add ${waiting.length} waiting player${waiting.length>1?"s":""}</button>`:""}<button id="btnEnd" ${S.busy?"disabled":""}>End game</button></div>`;
+}
+
+function vDrafting(d){
+  const myTurn = d.turn===S.me;
+  const last = d.picks[d.picks.length-1];
+  const rows=[];
+  for(let s=0;s<d.total;s++){
+    const p = d.picks.find(x=>x.slot===s), who = d.turnOf(s), r=Math.floor(s/d.n)+1, shown = r-1 < d.cr, z = p && shown && isZeroed(d.c,s,d.n);
+    const right = p ? (shown ? `<span class="num small ${z?"struck":""}">${fmt(p.value)}</span>` : (p.manual?`<span class="pill">typed in</span>`:`<span class="num hide small">•••••</span>`)) : (s===d.slot?`<span class="pill turn">Now</span>`:"");
+    rows.push(`<div class="slot ${s===d.slot?"next":""}"><span class="tag">R${r} · ${s+1}</span><div style="min-width:0"><div class="who">${esc(nickOf(who))}</div>${p?`<div class="ans ${z?"struck":""}">${esc(p.answer)}</div>`:(s===d.slot?`<div class="ans muted">On the clock</div>`:"")}</div>${right}</div>`);
+  }
+  return `
+  <section class="panel">
+    ${vBanner(d)}
+    ${myTurn?vPickBox(d):`<p class="muted">Waiting for <b>${esc(nickOf(d.turn))}</b> to pick.</p>`}
+    ${last && last.uid===S.me && !myTurn?`<div class="row"><button id="btnUndo" ${S.busy?"disabled":""}>Undo my last pick</button><span class="note">Only until the next player picks.</span></div>`:""}
+    ${S.msg?`<p class="err">${esc(S.msg)}</p>`:""}
+    ${d.cr>0?vTotals(d,d.cr-1):""}
+    <div class="board">${rows.join("")}</div>
+  </section>`;
+}
+
+function pickState(d){
+  const k = d.c+"_"+d.slot;
+  if(!S.pick || S.pick.k!==k) S.pick = {k, results:[], sel:null, manual:d.cat.metric==="custom", loading:false, err:"", q:""};
+  return S.pick;
+}
+function vPickBox(d){
+  const P = pickState(d), m = d.cat.metric, noun = METRICS[m].noun;
+  const manualFields = `
+    <div class="grid2">
+      <label for="pickAnswer">${esc(noun[0].toUpperCase()+noun.slice(1))}<input id="pickAnswer" maxlength="120" placeholder="Title and artist"></label>
+      <label for="pickValue">${esc(metricLabel(d.cat))}<input id="pickValue" inputmode="decimal" placeholder="e.g. 1,234,567 or 1.2b"></label>
+    </div>`;
+  let body;
+  if(m==="custom"){
+    body = manualFields + `<p class="note">This category scores by a number you choose, so enter it yourself.</p>`;
+  } else if(P.manual){
+    body = manualFields + `<p class="note">Typed-in picks are marked so the room can check the number during review. <a id="spLink" href="https://open.spotify.com/search" target="_blank" rel="noopener">Search Spotify</a></p>
+      <div class="row"><button id="btnBackToSearch" class="small">Back to search</button></div>`;
+  } else {
+    const list = P.results.map((r,i)=>`<button class="opt ${P.sel&&P.sel.id===r.id?"on":""}" data-sel="${i}"><span class="ot">${esc(r.label)}</span>${r.sub?`<span class="os">${esc(r.sub)}</span>`:""}</button>`).join("");
+    body = `
+      <label for="pickSearch">Search ${esc(noun)}s<input id="pickSearch" maxlength="120" autocomplete="off" placeholder="${m==="artists"?"Full artist name":"Full "+noun+" title"}"></label>
+      ${!P.q?`<p class="note">Type the whole title, in any order with the artist. Small typos are fine; partial words won't show suggestions.</p>`:""}
+      ${P.loading?`<p class="note">Searching…</p>`:""}
+      ${P.err?`<p class="err">${esc(P.err)}</p>`:""}
+      ${list?`<div class="opts">${list}</div>`:(P.q && !P.loading && !P.err?`<p class="note">No match. Type every word of the title (the artist is optional), or type it in.</p>`:"")}
+      ${P.sel?`<p class="small">Selected: <b>${esc(P.sel.label)}</b>${P.sel.sub?` <span class="muted">${esc(P.sel.sub)}</span>`:""}</p>`:""}
+      <div class="row"><button id="btnManual" class="small">Can't find it? Type it in</button></div>`;
+  }
+  return `<div class="stack"><h2>Your pick</h2>${body}<div class="row"><button class="primary" id="btnPick" ${S.busy||(m!=="custom"&&!P.manual&&!P.sel)?"disabled":""}>Lock in pick</button></div></div>`;
+}
+
+function vTotals(d,upTo){
+  const s = scoreCat(d.c,d.order,upTo);
+  return `<p class="small"><span class="muted">Totals after round ${upTo+1}:</span> ${d.order.map(u=>`<b>${esc(nickOf(u))}</b> <span class="num">${fmt(s.sums[u]||0)}</span>`).join(" · ")}</p>`;
+}
+function vReview(d){
+  const need = Math.floor((d.n-1)/2)+1;
+  const meDone = d.reviewed.includes(S.me);
+  const byPlayer = d.order.map(u=>({u,picks:d.rp.filter(p=>p.uid===u)}));
+  return `
+  <section class="panel">
+    ${vBanner(d)}
+    <div class="stack"><h2>Review round ${d.cr+1}</h2><p class="muted small">Flag any answer that doesn't fit the category. ${need} flag${need>1?"s":""} from other players zero an answer. Numbers for this round show once everyone is done.</p></div>
+    <div class="cols">${byPlayer.map(b=>`<div class="col"><h3>${esc(nickOf(b.u))}</h3>${b.picks.map(p=>{
+      const fc=flagCount(d.c,p.slot), mine=S.flags.some(f=>f.cat===d.c&&f.slot===p.slot&&f.uid===S.me), z=isZeroed(d.c,p.slot,d.n);
+      return `<div class="line"><span class="a">${esc(p.answer)}${p.manual?' <span class="pill">typed in</span>':""}</span>${p.uid===S.me?`<span class="pill ${z?"zero":""}">${fc} flag${fc===1?"":"s"}</span>`:`<button class="flag ${mine?"on":""}" data-flag="${p.slot}" aria-pressed="${mine}">${mine?"Flagged":"Flag"} · ${fc}</button>`}</div>`;}).join("")}</div>`).join("")}</div>
+    <div class="row">${d.inGame?`<button class="primary" id="btnReviewed" ${meDone||S.busy?"disabled":""}>${meDone?"Done reviewing":"I'm done reviewing"}</button>`:""}<span class="note">${d.reviewed.length} of ${d.n} done${d.n-d.reviewed.length?": waiting on "+esc(d.order.filter(u=>!d.reviewed.includes(u)).map(nickOf).join(", ")):""}</span></div>
+    ${d.inGame?`<div class="row"><button id="btnForce" class="small" ${S.busy?"disabled":""}>Reveal now</button><span class="note">Skips anyone who hasn't finished.</span></div>`:""}
+  </section>`;
+}
+
+function vReveal(d){
+  const final = d.phase==="reveal";
+  const s = scoreCat(d.c,d.order,d.cr);
+  const isHost = S.game.host===S.me;
+  return `
+  <section class="panel reveal">
+    ${vBanner(d)}
+    ${final?`<h2>${s.winners.length?esc(s.winners.map(nickOf).join(" & "))+" win"+(s.winners.length>1?"":"s")+" the category":"No points scored"}</h2>`:`<h2>Round ${d.cr+1} results</h2><p class="muted small">${s.winners.length?esc(s.winners.map(nickOf).join(" & "))+(s.winners.length>1?" are tied for the lead":" leads")+` after ${d.cr+1} of ${d.R} rounds.`:"No points yet."}</p>`}
+    <div class="cols">${d.order.map(u=>{
+      const ps=d.picks.filter(p=>p.uid===u && Math.floor(p.slot/d.n)<=d.cr);
+      return `<div class="col ${final&&s.winners.includes(u)?"win":""}"><h3>${esc(nickOf(u))}</h3>${ps.map(p=>{const z=isZeroed(d.c,p.slot,d.n), now=Math.floor(p.slot/d.n)===d.cr;return `<div class="line"><span class="a ${z?"struck":""}">${now&&!final?"<b>":""}${esc(p.answer)}${now&&!final?"</b>":""}${p.manual?' <span class="pill">typed in</span>':""}</span><span class="num small ${z?"struck":""}">${fmt(p.value)}</span></div>${z?'<span class="pill zero">Zeroed by the room</span>':""}`;}).join("")}<div class="line total"><span>Total</span><span class="num">${fmt(s.sums[u]||0)}</span></div></div>`;}).join("")}</div>
+    ${d.inGame&&!final?`<div class="row"><button class="primary" id="btnNextRound" ${S.busy?"disabled":""}>Start round ${d.cr+2}</button></div>`:""}
+    ${d.inGame&&final?`<div class="row"><button class="primary" id="btnNext" ${S.busy?"disabled":""}>Next category</button>${isHost?`<button id="btnEnd" ${S.busy?"disabled":""}>End game</button>`:""}</div><p class="note">Next up to set a category: ${esc(nickOf(d.order[(d.c+1)%d.n]))}.</p>`:""}
+  </section>`;
+}
+
+function vStandings(d,final){
+  const st = standings(d);
+  if(!st.done.length) return "";
+  return `<section class="panel">
+    <div class="stack"><span class="eyebrow">${final?"Final standings":"Standings"}</span>${final&&st.rows[0]?`<h1>${esc(nickOf(st.rows[0].uid))} wins the game</h1>`:""}</div>
+    <div style="overflow-x:auto"><table><thead><tr><th>Player</th><th class="r">Categories won</th><th class="r">Total counted</th></tr></thead>
+    <tbody>${st.rows.map(r=>`<tr><td>${esc(nickOf(r.uid))}${r.uid===S.me?' <span class="muted small">you</span>':""}</td><td class="r num">${r.wins}</td><td class="r num">${fmt(r.total)}</td></tr>`).join("")}</tbody></table></div>
+    <p class="note">${st.done.length} categor${st.done.length===1?"y":"ies"} played: ${st.done.map(x=>esc(x.text)).join(" · ")}</p>
+    ${final?`<div class="row"><button id="btnLeave">Back to start</button></div>`:""}
+  </section>`;
+}
+
+/* ---------- render ---------- */
+function render(){
+  // keep in-progress input values across re-renders
+  const keep={}; let focusId=null, sel=null;
+  $app.querySelectorAll("input[id],select[id]").forEach(el=>keep[el.id]=el.value);
+  if(document.activeElement && document.activeElement.id){ focusId=document.activeElement.id; try{sel=[document.activeElement.selectionStart,document.activeElement.selectionEnd]}catch(e){} }
+
+  let html="";
+  if(!S.booted){ html = `<section class="panel"><h2>Loading the room…</h2><p class="muted">Connecting to the shared game board.</p></section>`; $bar.innerHTML=""; }
+  else if(!S.db){ html = `<section class="panel"><h2>The shared game board isn't available here</h2><p class="muted">${S.why==="no-db"?"You don't seem to be signed in to Claude in this browser, or this app can't run shared pages. Open the link in a web browser while signed in.":"Claude can't tell who you are on this page. That happens when the page was opened through a public link. Ask the owner to invite your Claude account's email from the page's Share menu, then open the invite while signed in to that account."}</p><p class="note">Code: ${esc(S.why||"unknown")}</p></section>`; $bar.innerHTML=""; }
+  else if(!S.code){ html = vEntry(); $bar.innerHTML=""; }
+  else if(!S.ready){ html = `<section class="panel"><h2>Opening room ${esc(S.code)}…</h2></section>`; }
+  else if(!S.game){ html = `<section class="panel"><h2>Room ${esc(S.code)} doesn't exist</h2><div class="row"><button id="btnLeave">Back to start</button></div></section>`; }
+  else{
+    const d = derive();
+    const amMember = S.members.some(m=>m.uid===S.me);
+    $bar.innerHTML = `<div class="row">${NET.status?`<span class="pill zero">${esc(NET.status)}</span>`:(NET.host?`<span class="pill">Hosting · keep open</span>`:"")}<span class="code">${esc(S.code)}</span><button class="small" id="btnLeaveBar">${NET.host?"Close room":"Leave"}</button></div>`;
+    if(!amMember){
+      html = `<section class="panel"><h2>Join room ${esc(S.code)}</h2><label for="nick">Your name<input id="nick" maxlength="24" value="${esc(ls.get("sd-nick")||"")}"></label><div class="row"><button class="primary" id="btnJoinHere" ${S.busy?"disabled":""}>Join</button></div>${S.msg?`<p class="err">${esc(S.msg)}</p>`:""}</section>`;
+    } else {
+      const spect = d.phase!=="lobby" && d.phase!=="ended" && !d.inGame ? `<section class="panel"><p class="muted">The game started before you joined. You're watching; the host can add you before the next category.</p></section>` : "";
+      if(d.phase==="lobby") html = vLobby(d);
+      else if(d.phase==="setting") html = spect + vSetting(d) + vStandings(d);
+      else if(d.phase==="drafting") html = spect + vDrafting(d) + vStandings(d);
+      else if(d.phase==="review") html = spect + vReview(d) + vStandings(d);
+      else if(d.phase==="reveal"||d.phase==="roundReveal") html = spect + vReveal(d) + vStandings(d);
+      else if(d.phase==="ended") html = vStandings(d,true) || `<section class="panel"><h2>Game over</h2><div class="row"><button id="btnLeave">Back to start</button></div></section>`;
+      if(S.msg && d.phase!=="drafting") html += `<p class="err">${esc(S.msg)}</p>`;
+    }
+  }
+  $app.innerHTML = html;
+
+  Object.keys(keep).forEach(id=>{ const el=document.getElementById(id); if(el) el.value = keep[id]; });
+  if(focusId){ const el=document.getElementById(focusId); if(el){ el.focus(); if(sel && el.setSelectionRange && sel[0]!=null){ try{el.setSelectionRange(sel[0],sel[1])}catch(e){} } } }
+  wire();
+}
+
+/* ---------- event wiring ---------- */
+function on(id,fn){ const el=document.getElementById(id); if(el) el.onclick=fn; }
+function nickVal(){ const v=(document.getElementById("nick")||{}).value||""; return v.trim(); }
+
+function wire(){
+  on("btnCreate",()=>{ const n=nickVal(); if(!n){S.msg="Enter your name first.";return render();} act(()=>createRoom(n)); });
+  on("btnJoin",()=>{ const n=nickVal(), c=(document.getElementById("joinCode").value||"").trim(); if(!n){S.msg="Enter your name first.";return render();} if(c.length!==4){S.msg="Room codes are 4 letters.";return render();} act(()=>joinRoom(c,n)); });
+  on("btnJoinHere",()=>{ const n=nickVal(); if(!n){S.msg="Enter your name first.";return render();} act(()=>joinRoom(S.code,n)); });
+  on("btnLeave",leave); on("btnLeaveBar",leave);
+  on("btnCopy",()=>{ const el=document.getElementById("inviteLink"); el.select(); try{ navigator.clipboard.writeText(el.value); }catch(e){ try{ document.execCommand("copy"); }catch(x){} } const b=document.getElementById("btnCopy"); if(b) b.textContent="Copied"; });
+  const jc=document.getElementById("joinCode"); if(jc) jc.onkeydown=e=>{ if(e.key==="Enter") document.getElementById("btnJoin").click(); };
+
+  on("btnStart",()=>act(async()=>{
+    const order = S.members.slice().sort((a,b)=>a.joinedAt-b.joinedAt).map(m=>m.uid);
+    await gameRef().update({status:"playing",order,cat:0,round:0,forceReveal:-1});
+  }));
+  on("btnAddLate",()=>act(async()=>{
+    const add = S.members.filter(m=>!S.game.order.includes(m.uid)).sort((a,b)=>a.joinedAt-b.joinedAt).map(m=>m.uid);
+    await gameRef().update({order:S.game.order.concat(add)});
+  }));
+  on("btnEnd",()=>act(async()=>{
+    const d=derive();
+    await gameRef().update({status:"ended",cat: d.phase==="reveal" ? (S.game.cat||0)+1 : (S.game.cat||0)});
+  }));
+
+  const metricSel=document.getElementById("catMetric");
+  if(metricSel){ const sync=()=>{ document.getElementById("customWrap").hidden = metricSel.value!=="custom"; }; metricSel.onchange=sync; sync(); }
+  on("btnRandom",()=>{
+    const used = new Set(S.cats.map(x=>norm(x.text)));
+    const left = POOL.filter(p=>!used.has(norm(p[0])));
+    const pick = (left.length?left:POOL)[Math.floor(Math.random()*(left.length||POOL.length))];
+    document.getElementById("catText").value=pick[0]; metricSel.value=pick[1]; metricSel.onchange();
+  });
+  on("btnSetCat",()=>{
+    const text=document.getElementById("catText").value.trim(), metric=metricSel.value, rounds=parseInt(document.getElementById("catRounds").value,10);
+    const customLabel=(document.getElementById("catCustom").value||"").trim();
+    if(!text){S.msg="Write a category first.";return render();}
+    if(metric==="custom"&&!customLabel){S.msg="Name the number you're scoring by.";return render();}
+    const c=S.game.cat||0;
+    act(()=>S.db.doc("cats/"+S.code+"_"+c).set({game:S.code,c,text,metric,customLabel,rounds,setter:S.me,at:Date.now()}));
+  });
+
+  const search=document.getElementById("pickSearch");
+  if(search){
+    let t=null;
+    search.oninput=()=>{
+      clearTimeout(t);
+      const q=search.value, P=S.pick, m=derive().cat.metric;
+      t=setTimeout(async()=>{
+        P.q=q.trim(); P.err=""; P.sel=null;
+        if(toks(q).filter(x=>x.length>=2).length===0){ P.results=[]; P.loading=false; return render(); }
+        P.loading=true; render();
+        try{ const res=await searchData(m,q); if(search.value!==q) return; P.results=res; }
+        catch(e){ P.results=[]; P.err="The song data didn't load. Check your connection and try again."; }
+        P.loading=false; render();
+      },180);
+    };
+    search.onkeydown=e=>{ if(e.key==="Enter" && S.pick.results.length){ S.pick.sel=S.pick.results[0]; render(); } };
+  }
+  $app.querySelectorAll("[data-sel]").forEach(b=>b.onclick=()=>{ S.pick.sel=S.pick.results[parseInt(b.dataset.sel,10)]; S.msg=""; render(); });
+  on("btnManual",()=>{ S.pick.manual=true; S.msg=""; render(); });
+  on("btnBackToSearch",()=>{ S.pick.manual=false; S.msg=""; render(); });
+  const ans=document.getElementById("pickAnswer"), sp=document.getElementById("spLink");
+  if(ans && sp){ const upd=()=>{ sp.href="https://open.spotify.com/search/"+encodeURIComponent(ans.value.trim()); }; ans.oninput=upd; upd(); }
+  if(document.getElementById("btnPick")){
+    const go=()=>{
+      const d=derive(); if(d.phase!=="drafting"||d.turn!==S.me) return;
+      const P=S.pick; let rec;
+      if(P.manual){
+        const a=(document.getElementById("pickAnswer").value||"").trim(), v=parseNum(document.getElementById("pickValue").value);
+        if(!a){S.msg="Type your pick.";return render();}
+        if(v==null){S.msg="Enter the number as digits, like 1,234,567 or 1.2b.";return render();}
+        rec={answer:a,value:v,ref:"",manual:d.cat.metric!=="custom"};
+      } else {
+        if(!P.sel){S.msg="Choose a result from the list.";return render();}
+        rec={answer:P.sel.label+(P.sel.sub?" – "+P.sel.sub:""),value:P.sel.value,ref:P.sel.id,manual:false};
+      }
+      if(d.picks.some(p=>(rec.ref && p.ref===rec.ref) || norm(p.answer)===norm(rec.answer))){S.msg="Someone already picked that.";return render();}
+      act(async()=>{
+        await S.db.doc("picks/"+S.code+"_"+d.c+"_"+d.slot).set(Object.assign({game:S.code,cat:d.c,slot:d.slot,uid:S.me,at:Date.now()},rec));
+        S.pick=null;
+        ["pickSearch","pickAnswer","pickValue"].forEach(id=>{const el=document.getElementById(id); if(el) el.value="";});
+      });
+    };
+    on("btnPick",go);
+    const pv=document.getElementById("pickValue"); if(pv) pv.onkeydown=e=>{ if(e.key==="Enter") go(); };
+  }
+  on("btnUndo",()=>{ const d=derive(); const last=d.picks&&d.picks[d.picks.length-1]; if(!last||last.uid!==S.me) return; act(()=>S.db.doc("picks/"+last.id).delete()); });
+
+  $app.querySelectorAll("[data-flag]").forEach(b=>b.onclick=()=>{
+    const d=derive(), slot=parseInt(b.dataset.flag,10);
+    const ref=S.db.doc("flags/"+S.code+"_"+d.c+"_"+slot+"_"+S.me);
+    const mine=S.flags.some(f=>f.cat===d.c&&f.slot===slot&&f.uid===S.me);
+    act(()=> mine ? ref.delete() : ref.set({game:S.code,cat:d.c,slot,uid:S.me}));
+  });
+  on("btnReviewed",()=>{ const d=derive(); act(()=>S.db.doc("reviews/"+S.code+"_"+d.c+"_"+d.cr+"_"+S.me).set({game:S.code,cat:d.c,round:d.cr,uid:S.me})); });
+  on("btnForce",()=>{ const d=derive(); act(()=>gameRef().update({forceReveal:d.c+":"+d.cr})); });
+  on("btnNext",()=>{ const d=derive(); if(d.phase!=="reveal") return; act(()=>gameRef().update({cat:d.c+1,round:0,forceReveal:-1})); });
+  on("btnNextRound",()=>{ const d=derive(); if(d.phase!=="roundReveal") return; act(()=>gameRef().update({round:d.cr+1})); });
+}
+
+/* ---------- boot ---------- */
+render();
+dataMeta().then(render).catch(()=>{});
+(()=>{
+  let id = ls.get("sd-uid");
+  if(!id){ id = "p-"+Math.random().toString(36).slice(2,12); ls.set("sd-uid",id); }
+  S.me = id; S.db = netDb; S.booted = true;
+  const h=(location.hash||"").slice(1).toUpperCase();
+  if(/^[A-Z]{4}$/.test(h) && ls.get("sd-room-"+h)) resume(h);
+  else render();
+})();
+window.addEventListener("hashchange",()=>{ const h=(location.hash||"").slice(1).toUpperCase(); if(/^[A-Z]{4}$/.test(h) && h!==S.code && ls.get("sd-room-"+h)) resume(h); });
+})();
+</script>
+
+</body>
+</html>
