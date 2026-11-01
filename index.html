@@ -267,6 +267,7 @@ function hostRoom(code){
     const peer = new Peer(PFX+code, peerOpts()); NET.peer=peer; let opened=false;
     peer.on("open",()=>{ opened=true; NET.status=""; ls.set("sd-host-"+code,"1"); resolve(); netEmit(); });
     peer.on("connection",c=>{
+      try{ console.log("[songdraft] player connecting"); }catch(e){}
       c.on("open",()=>{ NET.conns.add(c); try{ c.send({t:"state",store:NET.store}); }catch(e){} });
       c.on("data",m=>{ if(m && m.t==="op" && m.op){ applyOp(m.op); hostBroadcast(); try{ c.send({t:"ack",id:m.id}); }catch(e){} } });
       c.on("close",()=>NET.conns.delete(c));
@@ -283,24 +284,38 @@ function joinNet(code){
   netReset(); NET.code=code;
   return new Promise((resolve,reject)=>{
     if(typeof Peer==="undefined") return reject({message:"The connection library didn't load. Check your internet and reload."});
-    let done=false;
+    let done=false, stage="server", ice="", tries=0, attemptTimer=null;
+    const log = (...a) => { try{ console.log("[songdraft]",...a); }catch(e){} };
     const peer = new Peer(peerOpts()); NET.peer=peer;
-    const fail = msg => { if(done) return; done=true; clearTimeout(timer); if(NET.peer===peer){ NET.peer=null; NET.code=null; } try{ peer.destroy(); }catch(e){} reject({message:msg}); };
-    const timer = setTimeout(()=>fail("Couldn't reach room "+code+". Check the code, and make sure the host still has the game open."),20000);
+    const fail = msg => { if(done) return; done=true; clearTimeout(timer); clearTimeout(attemptTimer); if(NET.peer===peer){ NET.peer=null; NET.code=null; } try{ peer.destroy(); }catch(e){} reject({message:msg}); };
+    const timer = setTimeout(()=>{
+      log("timeout at stage", stage, "ice", ice);
+      if(stage==="server") fail("Couldn't reach the connection server. Check your internet and try again.");
+      else if(stage==="host") fail("Room "+code+" exists, but the host's browser didn't answer"+(ice?" (link: "+ice+")":"")+". Ask the host to keep the game tab open and in front, then try again.");
+      else fail("Connected to the host, but the game didn't arrive. Try again.");
+    },30000);
     const connect = () => {
       if(NET.peer!==peer || peer.destroyed) return;
-      const c = peer.connect(PFX+code,{reliable:true}); NET.conn=c;
-      c.on("open",()=>{ NET.status=""; netEmit(); });
+      tries++; stage = done ? stage : "host"; ice="";
+      const old = NET.conn; if(old && !done){ try{ old.close(); }catch(e){} }
+      log("connecting to host, attempt", tries);
+      const c = peer.connect(PFX+code,{reliable:true, serialization:"json"}); NET.conn=c;
+      clearTimeout(attemptTimer);
+      if(!done) attemptTimer = setTimeout(()=>{ if(!done && NET.conn===c && !c.open && tries<3){ log("no answer, retrying"); connect(); } },9000);
+      c.on("iceStateChanged",st=>{ ice=st; log("link", st); });
+      c.on("open",()=>{ if(NET.conn!==c) return; if(!done) stage="link"; NET.status=""; netEmit(); log("link open"); });
       c.on("data",m=>{
-        if(!m) return;
-        if(m.t==="state"){ NET.store=m.store||{}; if(!done){ done=true; clearTimeout(timer); resolve(); } netEmit(); }
+        if(!m || NET.conn!==c) return;
+        if(m.t==="state"){ NET.store=m.store||{}; if(!done){ done=true; clearTimeout(timer); clearTimeout(attemptTimer); resolve(); } netEmit(); }
         else if(m.t==="ack"){ const p=NET.pending.get(m.id); if(p){ NET.pending.delete(m.id); p.resolve(); } }
       });
-      c.on("close",()=>{ if(NET.peer!==peer || peer.destroyed || !done) return; NET.status="Lost the host. Reconnecting…"; netEmit(); clearTimeout(NET.retry); NET.retry=setTimeout(connect,3000); });
+      c.on("error",e=>log("conn error", e && e.type));
+      c.on("close",()=>{ if(NET.conn!==c || NET.peer!==peer || peer.destroyed || !done) return; NET.status="Lost the host. Reconnecting…"; netEmit(); clearTimeout(NET.retry); NET.retry=setTimeout(connect,3000); });
     };
-    peer.on("open",connect);
+    peer.on("open",id=>{ log("server ok", id); connect(); });
     peer.on("disconnected",()=>{ if(NET.peer===peer && !peer.destroyed) setTimeout(()=>{ try{ peer.reconnect(); }catch(e){} },2000); });
     peer.on("error",e=>{
+      log("peer error", e.type);
       if(e.type==="peer-unavailable"){
         if(!done) fail("Room "+code+" isn't open. Check the code, and make sure the host still has the game open.");
         else { NET.status="The host is offline. Reconnecting…"; netEmit(); clearTimeout(NET.retry); NET.retry=setTimeout(connect,4000); }
