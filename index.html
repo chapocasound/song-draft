@@ -348,8 +348,18 @@ const netDb = {
     NET.subs.add(f); setTimeout(f,0); return ()=>NET.subs.delete(f);
   } }) })
 };
+const BUILD="5";
 let renderQueued=false;
 function scheduleRender(){ if(renderQueued) return; renderQueued=true; setTimeout(()=>{ renderQueued=false; render(); },0); }
+// opening an invite link: connect right away; join straight in when this browser already has a name
+async function autoJoin(code){
+  S.msg=""; S.connecting=code; render();
+  try{
+    await joinNet(code); S.connecting=null; enter(code);
+    const n=ls.get("sd-nick");
+    if(n) act(()=>joinRoom(code,n));
+  }catch(e){ netReset(); S.connecting=null; S.code=null; S.msg=e.message; render(); }
+}
 async function resume(code){
   S.msg="";
   try{
@@ -476,7 +486,7 @@ function vEntry(){
       <p><b>3. Review.</b> Everyone flags answers that don't fit the category. An answer flagged by a majority of the other players scores zero.</p>
       <p><b>4. Reveal.</b> The round's numbers are shown and added to each player's total. Repeat for every round; the highest total wins the category.</p>
     </div>
-    <p class="src">Stream counts: Spotify totals from kworb.net${DATA.meta?", snapshot of "+esc(DATA.meta.date)+" ("+DATA.meta.songs.toLocaleString("en-US")+" songs, "+DATA.meta.albums.toLocaleString("en-US")+" albums, "+DATA.meta.artists.toLocaleString("en-US")+" artists)":""}.</p>
+    <p class="src">Build ${BUILD}. Stream counts: Spotify totals from kworb.net${DATA.meta?", snapshot of "+esc(DATA.meta.date)+" ("+DATA.meta.songs.toLocaleString("en-US")+" songs, "+DATA.meta.albums.toLocaleString("en-US")+" albums, "+DATA.meta.artists.toLocaleString("en-US")+" artists)":""}.</p>
   </section>`;
 }
 
@@ -640,6 +650,7 @@ function render(){
   let html="";
   if(!S.booted){ html = `<section class="panel"><h2>Loading the room…</h2><p class="muted">Connecting to the shared game board.</p></section>`; $bar.innerHTML=""; }
   else if(!S.db){ html = `<section class="panel"><h2>The shared game board isn't available here</h2><p class="muted">${S.why==="no-db"?"You don't seem to be signed in to Claude in this browser, or this app can't run shared pages. Open the link in a web browser while signed in.":"Claude can't tell who you are on this page. That happens when the page was opened through a public link. Ask the owner to invite your Claude account's email from the page's Share menu, then open the invite while signed in to that account."}</p><p class="note">Code: ${esc(S.why||"unknown")}</p></section>`; $bar.innerHTML=""; }
+  else if(!S.code && S.connecting){ html = `<section class="panel"><h2>Joining room ${esc(S.connecting)}…</h2><p class="muted">Connecting to the host's browser. This can take up to half a minute.</p></section>`; $bar.innerHTML=""; }
   else if(!S.code){ html = vEntry(); $bar.innerHTML=""; }
   else if(!S.ready){ html = `<section class="panel"><h2>Opening room ${esc(S.code)}…</h2></section>`; }
   else if(!S.game){ html = `<section class="panel"><h2>Room ${esc(S.code)} doesn't exist</h2><div class="row"><button id="btnLeave">Back to start</button></div></section>`; }
@@ -776,10 +787,10 @@ dataMeta().then(render).catch(()=>{});
   if(!id){ id = "p-"+Math.random().toString(36).slice(2,12); ls.set("sd-uid",id); }
   S.me = id; S.db = netDb; S.booted = true;
   const h=(location.hash||"").slice(1).toUpperCase();
-  if(/^[A-Z]{4}$/.test(h) && ls.get("sd-room-"+h)) resume(h);
+  if(/^[A-Z]{4}$/.test(h)){ if(ls.get("sd-room-"+h) || ls.get("sd-host-"+h)) resume(h); else autoJoin(h); }
   else render();
 })();
-window.addEventListener("hashchange",()=>{ const h=(location.hash||"").slice(1).toUpperCase(); if(/^[A-Z]{4}$/.test(h) && h!==S.code && ls.get("sd-room-"+h)) resume(h); });
+window.addEventListener("hashchange",()=>{ const h=(location.hash||"").slice(1).toUpperCase(); if(/^[A-Z]{4}$/.test(h) && h!==S.code){ if(ls.get("sd-room-"+h) || ls.get("sd-host-"+h)) resume(h); else autoJoin(h); } });
 })();
 </script>
 
