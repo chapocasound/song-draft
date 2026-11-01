@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="description" content="Draft songs, artists or albums with friends and score by Spotify streams.">
-<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
 <title>Song Draft</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Figtree:wght@400;500;600&family=IBM+Plex+Mono:wght@500;600&display=swap">
@@ -231,108 +231,130 @@ const metricLabel = cat => cat ? (cat.metric==="custom" ? (cat.customLabel||"Cus
 
 
 /* ---------- peer-to-peer room: the host's browser keeps the game, others connect to it ---------- */
-const PFX = "songdraft-v1-";
+const BROKER = new URLSearchParams(location.search).get("broker") || "wss://broker.emqx.io:8084/mqtt";
+const TOPIC = code => "songdraft-chapoca/v2/"+code;
 const clone = v => v==null ? v : JSON.parse(JSON.stringify(v));
-const NET = {peer:null, host:false, code:null, conns:new Set(), conn:null, store:{}, subs:new Set(), pending:new Map(), seq:0, status:"", retry:null};
+const NET = {client:null, host:false, code:null, token:null, store:{}, subs:new Set(), pending:new Map(), seq:0, status:"", done:new Set(), lastOps:[], hostOnline:null};
+const nlog = (...a) => { try{ console.log("[songdraft]",...a); }catch(e){} };
 function netEmit(){ NET.subs.forEach(f=>{ try{ f(); }catch(e){} }); }
 function applyOp(op){
   if(op.kind==="set") NET.store[op.path]=op.data;
   else if(op.kind==="update") NET.store[op.path]=Object.assign({},NET.store[op.path]||{},op.data);
   else if(op.kind==="delete") delete NET.store[op.path];
 }
-function hostBroadcast(){
+function mqttOpts(extra){ return Object.assign({clientId:"sd_"+Math.random().toString(36).slice(2,12), clean:true, connectTimeout:8000, reconnectPeriod:2000, keepalive:20}, extra||{}); }
+function publishState(){
   ls.set("sd-store-"+NET.code, JSON.stringify(NET.store));
-  const msg={t:"state",store:NET.store};
-  NET.conns.forEach(c=>{ try{ if(c.open) c.send(msg); }catch(e){} });
-  netEmit();
+  const c=NET.client; if(!c || !c.connected) return;
+  c.publish(TOPIC(NET.code)+"/state", JSON.stringify({store:NET.store, ops:NET.lastOps, at:Date.now()}), {qos:1, retain:true});
 }
-function peerOpts(){
-  const h=new URLSearchParams(location.search).get("peerhost");
-  if(!h) return {debug:0};
-  const [host,port]=h.split(":");
-  return {host, port:+port||443, path:"/", secure:!port, debug:0};
-}
+function announceHost(){ const c=NET.client; if(c && c.connected) c.publish(TOPIC(NET.code)+"/host", JSON.stringify({token:NET.token, at:Date.now()}), {qos:1, retain:true}); }
+function hostBroadcast(){ publishState(); netEmit(); }
 function netReset(){
-  clearTimeout(NET.retry);
-  const old=NET.peer; NET.peer=null;
-  try{ old && old.destroy(); }catch(e){}
-  NET.conn=null; NET.conns=new Set(); NET.host=false; NET.code=null; NET.store={}; NET.status="";
+  const c=NET.client; NET.client=null;
+  try{ c && c.end(true); }catch(e){}
+  NET.host=false; NET.code=null; NET.token=null; NET.store={}; NET.status=""; NET.hostOnline=null; NET.done=new Set(); NET.lastOps=[];
   NET.pending.forEach(p=>p.reject({message:"Disconnected."})); NET.pending.clear();
+}
+// the host closing the room on purpose: clear it on the server so the code is free again
+function netClose(){
+  const c=NET.client;
+  if(NET.host && c && c.connected){
+    const T=TOPIC(NET.code);
+    try{ c.publish(T+"/state","",{qos:1,retain:true}); c.publish(T+"/host","",{qos:1,retain:true},()=>{ try{ c.end(); }catch(e){} }); }catch(e){}
+    NET.client=null;
+  }
+  netReset();
 }
 function hostRoom(code){
   netReset(); NET.code=code; NET.host=true;
-  try{ NET.store = JSON.parse(ls.get("sd-store-"+code)||"{}")||{}; }catch(e){ NET.store={}; }
+  const saved = ls.get("sd-host-"+code);
+  NET.token = saved || Math.random().toString(36).slice(2,12);
+  NET.store = {};
+  if(saved){ try{ NET.store = JSON.parse(ls.get("sd-store-"+code)||"null")||{}; }catch(e){} }
   return new Promise((resolve,reject)=>{
-    if(typeof Peer==="undefined") return reject({message:"The connection library didn't load. Check your internet and reload."});
-    const peer = new Peer(PFX+code, peerOpts()); NET.peer=peer; let opened=false;
-    peer.on("open",()=>{ opened=true; NET.status=""; ls.set("sd-host-"+code,"1"); resolve(); netEmit(); });
-    peer.on("connection",c=>{
-      try{ console.log("[songdraft] player connecting"); }catch(e){}
-      c.on("open",()=>{ NET.conns.add(c); try{ c.send({t:"state",store:NET.store}); }catch(e){} });
-      c.on("data",m=>{ if(m && m.t==="op" && m.op){ applyOp(m.op); hostBroadcast(); try{ c.send({t:"ack",id:m.id}); }catch(e){} } });
-      c.on("close",()=>NET.conns.delete(c));
-      c.on("error",()=>NET.conns.delete(c));
+    if(typeof mqtt==="undefined") return reject({message:"The connection library didn't load. Check your internet and reload."});
+    const T=TOPIC(code);
+    const c = mqtt.connect(BROKER, mqttOpts({will:{topic:T+"/host", payload:"", qos:1, retain:true}}));
+    NET.client=c;
+    let settled=false, ready=false, otherHost=false, retained=null;
+    const t = setTimeout(()=>{ if(settled) return; settled=true; if(NET.client===c) netReset(); else try{ c.end(true); }catch(e){} reject({message:"Couldn't reach the game server. Check your internet and try again."}); },15000);
+    c.on("connect",()=>{
+      nlog("host connected");
+      if(NET.client!==c) return;
+      NET.status=""; netEmit();
+      c.subscribe([T+"/host",T+"/op",T+"/state"],{qos:1});
+      if(ready){ announceHost(); publishState(); return; }
+      setTimeout(()=>{
+        if(settled || NET.client!==c) return;
+        if(otherHost){ settled=true; clearTimeout(t); netReset(); return reject({message:"already-hosted"}); }
+        if(saved && !Object.keys(NET.store).length && retained) NET.store = retained;
+        ready=true; settled=true; clearTimeout(t);
+        ls.set("sd-host-"+code, NET.token);
+        announceHost(); publishState(); resolve(); netEmit();
+      },1500);
     });
-    peer.on("disconnected",()=>{ if(NET.peer===peer && !peer.destroyed){ NET.status="Reconnecting to the connection server…"; netEmit(); setTimeout(()=>{ try{ peer.reconnect(); }catch(e){} },2000); } });
-    peer.on("error",e=>{
-      if(!opened){ if(NET.peer===peer) NET.peer=null; try{ peer.destroy(); }catch(x){} reject({message: e.type==="unavailable-id" ? "already-hosted" : "Couldn't reach the connection server ("+e.type+"). Check your internet and try again."}); }
-      else { NET.status="Connection problem ("+e.type+")."; netEmit(); }
+    c.on("message",(topic,payload)=>{
+      if(NET.client!==c) return;
+      const txt = payload.toString();
+      if(topic===T+"/host"){ if(!ready && txt){ try{ if(JSON.parse(txt).token!==NET.token) otherHost=true; }catch(e){} } return; }
+      if(topic===T+"/state"){ if(!ready && txt){ try{ retained = JSON.parse(txt).store||null; }catch(e){} } return; }
+      if(topic===T+"/op" && ready){
+        let m; try{ m=JSON.parse(txt); }catch(e){ return; }
+        if(!m || !m.id || !m.op || NET.done.has(m.id)) return;
+        NET.done.add(m.id); NET.lastOps.push(m.id); if(NET.lastOps.length>80) NET.lastOps.shift();
+        applyOp(m.op); hostBroadcast();
+      }
     });
+    c.on("offline",()=>{ if(NET.client===c){ NET.status="Reconnecting to the game server…"; netEmit(); } });
+    c.on("error",e=>nlog("host error", e && e.message));
   });
 }
 function joinNet(code){
   netReset(); NET.code=code;
   return new Promise((resolve,reject)=>{
-    if(typeof Peer==="undefined") return reject({message:"The connection library didn't load. Check your internet and reload."});
-    let done=false, stage="server", ice="", tries=0, attemptTimer=null;
-    const log = (...a) => { try{ console.log("[songdraft]",...a); }catch(e){} };
-    const peer = new Peer(peerOpts()); NET.peer=peer;
-    const fail = msg => { if(done) return; done=true; clearTimeout(timer); clearTimeout(attemptTimer); if(NET.peer===peer){ NET.peer=null; NET.code=null; } try{ peer.destroy(); }catch(e){} reject({message:msg}); };
-    const timer = setTimeout(()=>{
-      log("timeout at stage", stage, "ice", ice);
-      if(stage==="server") fail("Couldn't reach the connection server. Check your internet and try again.");
-      else if(stage==="host") fail("Room "+code+" exists, but the host's browser didn't answer"+(ice?" (link: "+ice+")":"")+". Ask the host to keep the game tab open and in front, then try again.");
-      else fail("Connected to the host, but the game didn't arrive. Try again.");
-    },30000);
-    const connect = () => {
-      if(NET.peer!==peer || peer.destroyed) return;
-      tries++; stage = done ? stage : "host"; ice="";
-      const old = NET.conn; if(old && !done){ try{ old.close(); }catch(e){} }
-      log("connecting to host, attempt", tries);
-      const c = peer.connect(PFX+code,{reliable:true, serialization:"json"}); NET.conn=c;
-      clearTimeout(attemptTimer);
-      if(!done) attemptTimer = setTimeout(()=>{ if(!done && NET.conn===c && !c.open && tries<3){ log("no answer, retrying"); connect(); } },9000);
-      c.on("iceStateChanged",st=>{ ice=st; log("link", st); });
-      c.on("open",()=>{ if(NET.conn!==c) return; if(!done) stage="link"; NET.status=""; netEmit(); log("link open"); });
-      c.on("data",m=>{
-        if(!m || NET.conn!==c) return;
-        if(m.t==="state"){ NET.store=m.store||{}; if(!done){ done=true; clearTimeout(timer); clearTimeout(attemptTimer); resolve(); } netEmit(); }
-        else if(m.t==="ack"){ const p=NET.pending.get(m.id); if(p){ NET.pending.delete(m.id); p.resolve(); } }
+    if(typeof mqtt==="undefined") return reject({message:"The connection library didn't load. Check your internet and reload."});
+    const T=TOPIC(code); let done=false;
+    const c = mqtt.connect(BROKER, mqttOpts()); NET.client=c;
+    const fail = msg => { if(done) return; done=true; clearTimeout(timer); if(NET.client===c) netReset(); else try{ c.end(true); }catch(e){} reject({message:msg}); };
+    let timer = setTimeout(()=>fail("Couldn't reach the game server. Check your internet and try again."),15000);
+    const offlineMsg = "The host is offline. Waiting for them to come back…";
+    c.on("connect",()=>{
+      nlog("guest connected");
+      if(NET.client!==c) return;
+      NET.status = NET.hostOnline===false ? offlineMsg : ""; netEmit();
+      c.subscribe([T+"/state",T+"/host"],{qos:1},err=>{
+        if(err) return fail("Couldn't open room "+code+". Try again.");
+        if(!done){ clearTimeout(timer); timer=setTimeout(()=>fail("Room "+code+" isn't open. Check the code, and make sure the host still has the game open."),6000); }
       });
-      c.on("error",e=>log("conn error", e && e.type));
-      c.on("close",()=>{ if(NET.conn!==c || NET.peer!==peer || peer.destroyed || !done) return; NET.status="Lost the host. Reconnecting…"; netEmit(); clearTimeout(NET.retry); NET.retry=setTimeout(connect,3000); });
-    };
-    peer.on("open",id=>{ log("server ok", id); connect(); });
-    peer.on("disconnected",()=>{ if(NET.peer===peer && !peer.destroyed) setTimeout(()=>{ try{ peer.reconnect(); }catch(e){} },2000); });
-    peer.on("error",e=>{
-      log("peer error", e.type);
-      if(e.type==="peer-unavailable"){
-        if(!done) fail("Room "+code+" isn't open. Check the code, and make sure the host still has the game open.");
-        else { NET.status="The host is offline. Reconnecting…"; netEmit(); clearTimeout(NET.retry); NET.retry=setTimeout(connect,4000); }
-      }
-      else if(!done) fail("Couldn't connect ("+e.type+"). Check your internet and try again.");
-      else { NET.status="Connection problem ("+e.type+")."; netEmit(); }
     });
+    c.on("message",(topic,payload)=>{
+      if(NET.client!==c) return;
+      const txt = payload.toString();
+      if(topic===T+"/host"){ NET.hostOnline = !!txt; NET.status = NET.hostOnline ? "" : offlineMsg; netEmit(); return; }
+      if(topic===T+"/state"){
+        if(!txt){ if(!done) fail("Room "+code+" isn't open. Check the code, and make sure the host still has the game open."); return; }
+        let m; try{ m=JSON.parse(txt); }catch(e){ return; }
+        NET.store = m.store||{};
+        (m.ops||[]).forEach(id=>{ const p=NET.pending.get(id); if(p){ NET.pending.delete(id); p.resolve(); } });
+        if(!done){ done=true; clearTimeout(timer); resolve(); }
+        netEmit();
+      }
+    });
+    c.on("offline",()=>{ if(NET.client===c && done){ NET.status="Reconnecting to the game server…"; netEmit(); } });
+    c.on("error",e=>nlog("guest error", e && e.message));
   });
 }
 function netWrite(op){
   if(NET.host){ applyOp(op); hostBroadcast(); return Promise.resolve(); }
   return new Promise((resolve,reject)=>{
-    const c=NET.conn;
-    if(!c || !c.open) return reject({message:"Not connected to the host right now. Wait a moment and try again."});
-    const id=++NET.seq; NET.pending.set(id,{resolve,reject});
-    try{ c.send({t:"op",id,op}); }catch(e){ NET.pending.delete(id); return reject({message:"Couldn't send that to the host."}); }
-    setTimeout(()=>{ if(NET.pending.has(id)){ NET.pending.delete(id); reject({message:"The host didn't answer. Try again."}); } },8000);
+    const c=NET.client;
+    if(!c || !c.connected) return reject({message:"Not connected right now. Wait a moment and try again."});
+    if(NET.hostOnline===false) return reject({message:"The host is offline, so nothing can change until they're back."});
+    const id = S.me+"-"+Date.now().toString(36)+"-"+(++NET.seq);
+    NET.pending.set(id,{resolve,reject});
+    c.publish(TOPIC(NET.code)+"/op", JSON.stringify({id,op}), {qos:1});
+    setTimeout(()=>{ if(NET.pending.has(id)){ NET.pending.delete(id); reject({message:"The host didn't answer. Make sure the host still has the game open, then try again."}); } },10000);
   });
 }
 const netDb = {
@@ -348,7 +370,7 @@ const netDb = {
     NET.subs.add(f); setTimeout(f,0); return ()=>NET.subs.delete(f);
   } }) })
 };
-const BUILD="5";
+const BUILD="6";
 let renderQueued=false;
 function scheduleRender(){ if(renderQueued) return; renderQueued=true; setTimeout(()=>{ renderQueued=false; render(); },0); }
 // opening an invite link: connect right away; join straight in when this browser already has a name
@@ -433,7 +455,7 @@ async function createRoom(nick){
 }
 async function joinRoom(code,nick){
   code = code.toUpperCase().replace(/[^A-Z]/g,"");
-  if(!(NET.code===code && (NET.host || (NET.conn && NET.conn.open)))){
+  if(!(NET.code===code && (NET.host || NET.client))){
     try{ await joinNet(code); }catch(e){ throw e; }
   }
   const snap = await S.db.doc("games/"+code).get();
@@ -453,7 +475,7 @@ function enter(code){
   });
   render();
 }
-function leave(){ S.unsubs.forEach(u=>u()); S.unsubs=[]; if(S.code){ try{ localStorage.removeItem("sd-host-"+S.code); localStorage.removeItem("sd-room-"+S.code); }catch(e){} } netReset(); S.code=null; S.game=null; history.replaceState(null,"",location.pathname+location.search); render(); }
+function leave(){ S.unsubs.forEach(u=>u()); S.unsubs=[]; if(S.code){ try{ localStorage.removeItem("sd-host-"+S.code); localStorage.removeItem("sd-room-"+S.code); }catch(e){} } netClose(); S.code=null; S.game=null; history.replaceState(null,"",location.pathname+location.search); render(); }
 
 /* ---------- views ---------- */
 function vEntry(){
